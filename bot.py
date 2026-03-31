@@ -86,3 +86,4 @@ if __name__ == "__main__":
         print("Nincs DISCORD_TOKEN környezeti változó!")
     else:
         bot.run(DISCORD_TOKEN)
+        
