@@ -1,14 +1,14 @@
 import discord
-from discord.ext import tasks, commands
+from discord.ext import tasks
 from collections import deque
 from datetime import datetime, timedelta
 import os
 
-# A dotenv csak lokális fejlesztéshez kell, Render-en a környezeti változókat használjuk
+# Lokális fejlesztéshez (Render-en nem szükséges)
 from dotenv import load_dotenv
 load_dotenv()
 
-# Token beolvasása környezeti változóból
+# Token beolvasása
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 if not DISCORD_TOKEN:
     raise ValueError("A DISCORD_TOKEN nincs beállítva. Ellenőrizd az Environment Variable-t!")
@@ -19,26 +19,35 @@ intents.guilds = True
 intents.messages = True
 intents.message_content = True
 
-# Bot létrehozása prefix-szel
-bot = commands.Bot(command_prefix="!", intents=intents)
+# Bot létrehozása
+bot = discord.Bot(intents=intents)
 
-# Csatornánkénti várólista és óra alapú publikálás követése
+# Csatornánkénti várólista és óra alapú limit
 queues = {}            # queues[channel_id] = deque([(message, timestamp), ...])
 published_counts = {}  # csatornánként
 hour_starts = {}       # csatornánként
 
+# Ready esemény
 @bot.event
 async def on_ready():
     print(f"Bot készen áll! Bejelentkezve mint {bot.user}")
     process_queue.start()
 
+# Üzenetek feldolgozása
 @bot.event
 async def on_message(message):
-    # Ne reagáljunk saját üzenetre
     if message.author == bot.user:
         return
 
     channel = message.channel
+
+    # !darky parancs kezelése
+    if message.content.strip().lower() == "!darky":
+        try:
+            await channel.send("✅")
+        except Exception as e:
+            print(f"Hiba a !darky küldésénél: {e}")
+        return
 
     # Csak announcement csatornákban próbálkozunk
     if isinstance(channel, discord.TextChannel) and channel.is_news():
@@ -49,7 +58,7 @@ async def on_message(message):
         now = datetime.utcnow()
         channel_id = channel.id
 
-        # Inicializálás, ha még nincs csatornához adat
+        # Inicializálás
         if channel_id not in queues:
             queues[channel_id] = deque()
             published_counts[channel_id] = 0
@@ -73,9 +82,7 @@ async def on_message(message):
             print(f"[{now.isoformat()}] Limit elérve, üzenet sorba állítva csatornában {channel.name}: {message.id}")
             queues[channel_id].append((message, now))
 
-    # Fontos: commands.Bot használatakor mindig hívd az on_message végén
-    await bot.process_commands(message)
-
+# Várólista feldolgozása
 @tasks.loop(seconds=10)
 async def process_queue():
     now = datetime.utcnow()
@@ -88,7 +95,7 @@ async def process_queue():
             hour_starts[channel_id] = now
             published_counts[channel_id] = 0
 
-        # Várólista feldolgozása
+        # Feldolgozás a limitig
         while queue and published_counts[channel_id] < 10:
             message, timestamp = queue.popleft()
             try:
@@ -99,15 +106,6 @@ async def process_queue():
                 print(f"Hiba a várólistás publish során: {e}")
                 queue.appendleft((message, timestamp))
                 break
-
-# Parancs: !darky -> küld egy zöld pipát
-@bot.command(name="darky")
-async def darky_command(ctx):
-    try:
-        # ✅ emoji Unicode
-        await ctx.send("✅")
-    except Exception as e:
-        print(f"Hiba a !darky parancs során: {e}")
 
 # Bot futtatása
 bot.run(DISCORD_TOKEN)
