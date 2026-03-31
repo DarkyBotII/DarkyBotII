@@ -130,3 +130,4 @@ if __name__ == "__main__":
     else:
         print("[INDÍTÁS] Bot indul...")
         bot.run(DISCORD_TOKEN)
+
