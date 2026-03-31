@@ -4,6 +4,7 @@ import os
 import requests
 from flask import Flask
 import threading
+import re
 
 # ===== UPTIME FLASK APP =====
 app = Flask("")
@@ -19,6 +20,30 @@ def keep_alive():
     t = threading.Thread(target=run)
     t.start()
 
+# ===== LOAD LIST WITH [] SUPPORT =====
+def load_list(filename):
+    try:
+        with open(filename, "r") as f:
+            content = f.read()
+            matches = re.findall(r"\[(.*?)\]", content)
+            cleaned = [m.strip() for m in matches if m.strip()]
+            
+            print(f"[OK] {filename} betöltve: {cleaned}")
+            return cleaned
+
+    except FileNotFoundError:
+        print(f"[HIBA] {filename} nem található!")
+        return []
+
+    except Exception as e:
+        print(f"[HIBA] {filename} olvasási hiba: {e}")
+        return []
+
+# ===== LOAD IDS =====
+allowed_servers = load_list("serverid.txt")
+allowed_users = load_list("userid.txt")
+allowed_roles = load_list("rangid.txt")
+
 # ===== BOT SETUP =====
 intents = discord.Intents.default()
 intents.message_content = True
@@ -27,63 +52,81 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# ===== LOAD IDS AND ROLES =====
-def load_list(filename):
-    """Betölt soronként, üres lista ha nincs fájl vagy üres"""
-    try:
-        with open(filename, "r") as f:
-            return [line.strip() for line in f if line.strip()]
-    except FileNotFoundError:
-        return []
-
-allowed_servers = load_list("serverid.txt")  # csak ezekben fut
-allowed_users = load_list("userid.txt")      # csak ezek használhatják a parancsokat
-allowed_roles = load_list("rangid.txt")      # csak ezek a rangok használhatják
-
-# ===== CHECK DECORATOR =====
+# ===== PERMISSION CHECK =====
 def check_permissions(ctx):
-    # Szerver ellenőrzés
-    if allowed_servers and str(ctx.guild.id) not in allowed_servers:
-        return False
+    # SERVER CHECK
+    if allowed_servers:
+        if str(ctx.guild.id) not in allowed_servers:
+            return False, "Ez a szerver nincs engedélyezve!"
 
-    # Felhasználó ellenőrzés
-    if allowed_users and str(ctx.author.id) not in allowed_users:
-        return False
+    # USER CHECK
+    if allowed_users:
+        if str(ctx.author.id) not in allowed_users:
+            return False, "Te nem használhatod ezt a parancsot!"
 
-    # Rang ellenőrzés
+    # ROLE CHECK
     if allowed_roles:
         author_roles = [role.name for role in ctx.author.roles] + [str(role.id) for role in ctx.author.roles]
+        
         if not any(r in allowed_roles for r in author_roles):
-            return False
+            return False, "Nincs megfelelő rangod!"
 
-    return True
+    return True, "OK"
 
 # ===== COMMANDS =====
 @bot.command()
 async def ping(ctx):
-    if not check_permissions(ctx):
-        await ctx.send("Nincs jogosultságod ehhez a parancshoz!")
+    allowed, reason = check_permissions(ctx)
+
+    if not allowed:
+        await ctx.send(f"❌ {reason}")
+        print(f"[TILTÁS] {ctx.author} → {reason}")
         return
-    await ctx.send(f"Pong! 🏓 Latency: {round(bot.latency*1000)}ms")
+
+    await ctx.send(f"🏓 Pong! Latency: {round(bot.latency*1000)}ms")
+    print(f"[OK] ping: {ctx.author}")
+
 
 @bot.command()
 async def hello(ctx):
-    if not check_permissions(ctx):
-        await ctx.send("Nincs jogosultságod ehhez a parancshoz!")
+    allowed, reason = check_permissions(ctx)
+
+    if not allowed:
+        await ctx.send(f"❌ {reason}")
+        print(f"[TILTÁS] {ctx.author} → {reason}")
         return
-    await ctx.send(f"Szia, {ctx.author.mention}!")
+
+    await ctx.send(f"👋 Szia, {ctx.author.mention}!")
+    print(f"[OK] hello: {ctx.author}")
 
 # ===== EVENTS =====
 @bot.event
 async def on_ready():
-    print(f"{bot.user} elindult és készen áll!")
+    print(f"[START] {bot.user} elindult!")
+
+    print("===== BETÖLTÖTT ADATOK =====")
+    print("Servers:", allowed_servers)
+    print("Users:", allowed_users)
+    print("Roles:", allowed_roles)
+    print("============================")
+
+
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+    
+    print(f"[ÜZENET] {message.author}: {message.content}")
+    await bot.process_commands(message)
 
 # ===== MAIN =====
 if __name__ == "__main__":
-    keep_alive()  # Flask uptime ping
+    keep_alive()
+
     DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
+
     if not DISCORD_TOKEN:
-        print("Nincs DISCORD_TOKEN környezeti változó!")
+        print("[HIBA] Nincs DISCORD_TOKEN!")
     else:
+        print("[INDÍTÁS] Bot indul...")
         bot.run(DISCORD_TOKEN)
-        
