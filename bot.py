@@ -1,12 +1,13 @@
 import discord
+from discord.ext import commands
 from datetime import datetime, timedelta
 import os
 
-# Lokális fejlesztéshez dotenv
+# dotenv (lokális fejlesztéshez)
 from dotenv import load_dotenv
 load_dotenv()
 
-# Token beolvasása
+# Token
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 if not DISCORD_TOKEN:
     raise ValueError("A DISCORD_TOKEN nincs beállítva!")
@@ -17,10 +18,10 @@ intents.guilds = True
 intents.messages = True
 intents.message_content = True
 
-# Bot
-bot = discord.Bot(intents=intents)
+# Bot (discord.py kompatibilis!)
+bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Óránkénti limit tracking
+# Limit tracking
 published_counts = {}
 hour_starts = {}
 
@@ -38,15 +39,15 @@ async def on_message(message):
         try:
             await message.channel.send("✅")
         except Exception as e:
-            print(f"Hiba a parancs küldésekor: {e}")
+            print(f"Hiba a parancsnál: {e}")
 
     channel = message.channel
 
-    # Csak announcement (news) csatornák
+    # Csak announcement csatornák
     if isinstance(channel, discord.TextChannel) and channel.is_news():
         perms = channel.permissions_for(channel.guild.me)
 
-        # Kell minden fontos jog!
+        # szükséges jogok
         if not (perms.send_messages and perms.manage_messages):
             print("Hiányzó jogosultság!")
             return
@@ -54,31 +55,33 @@ async def on_message(message):
         now = datetime.utcnow()
         channel_id = channel.id
 
-        # Inicializálás
+        # init
         if channel_id not in published_counts:
             published_counts[channel_id] = 0
             hour_starts[channel_id] = now
 
-        # Óra reset
+        # óra reset
         if now - hour_starts[channel_id] >= timedelta(hours=1):
             hour_starts[channel_id] = now
             published_counts[channel_id] = 0
 
-        # Debug
-        print(f"Próbál publish: {message.id} | csatorna: {channel.name}")
+        print(f"Publish próbálkozás: {message.id}")
 
-        # Limit ellenőrzés
+        # limit check
         if published_counts[channel_id] < 10:
             try:
                 await message.publish()
                 published_counts[channel_id] += 1
-                print(f"[{now.isoformat()}] Publikálva: {message.id}")
+                print(f"Publikálva: {message.id}")
             except Exception as e:
                 print(f"Hiba publish során: {e}")
         else:
-            print(f"[{now.isoformat()}] LIMIT ELÉRVE – kihagyva: {message.id}")
+            print(f"LIMIT ELÉRVE – kihagyva: {message.id}")
 
-# --- Mini webserver Flask ---
+    # ⚠️ EZ KELL a discord.py-hoz!
+    await bot.process_commands(message)
+
+# --- Mini webserver (Render miatt) ---
 from flask import Flask
 from threading import Thread
 
@@ -92,8 +95,7 @@ def run_webserver():
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
 
-# Webserver külön szálon
 Thread(target=run_webserver).start()
 
-# Bot indítása
+# Indítás
 bot.run(DISCORD_TOKEN)
