@@ -99,3 +99,4 @@ async def process_queue():
 
 # Bot futtatása
 bot.run(DISCORD_TOKEN)
+
