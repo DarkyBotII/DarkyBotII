@@ -1,143 +1,125 @@
 import discord
-from discord.ext import commands
-import os
-from flask import Flask
-import threading
-import re
-import asyncio
-import time
+from discord.ext import tasks
 from collections import deque
+from datetime import datetime, timedelta
+import os
+import asyncio
 
-# ===== FLASK =====
+# Lokális fejlesztéshez dotenv
+from dotenv import load_dotenv
+load_dotenv()
+
+# Token beolvasása környezeti változóból
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+if not DISCORD_TOKEN:
+    raise ValueError("A DISCORD_TOKEN nincs beállítva. Ellenőrizd az Environment Variable-t!")
+
+# Intents beállítása
+intents = discord.Intents.default()
+intents.guilds = True
+intents.messages = True
+intents.message_content = True
+
+# Bot létrehozása
+bot = discord.Bot(intents=intents)
+
+# Csatornánkénti várólista és óra alapú publikálás követése
+queues = {}            # queues[channel_id] = deque([(message, timestamp), ...])
+published_counts = {}  # csatornánként
+hour_starts = {}       # csatornánként
+
+@bot.event
+async def on_ready():
+    print(f"Bot készen áll! Bejelentkezve mint {bot.user}")
+    process_queue.start()
+
+@bot.event
+async def on_message(message):
+    if message.author == bot.user:
+        return
+
+    # Parancs: !darky -> írjon zöld pipát az adott csatornába
+    if message.content.strip().lower() == "!darky":
+        try:
+            await message.channel.send("✅")
+        except Exception as e:
+            print(f"Hiba a parancs küldésekor: {e}")
+
+    channel = message.channel
+
+    # Csak announcement csatornákban próbálkozunk
+    if isinstance(channel, discord.TextChannel) and channel.is_news():
+        perms = channel.permissions_for(channel.guild.me)
+        if not perms.manage_messages:
+            return
+
+        now = datetime.utcnow()
+        channel_id = channel.id
+
+        # Inicializálás, ha még nincs csatornához adat
+        if channel_id not in queues:
+            queues[channel_id] = deque()
+            published_counts[channel_id] = 0
+            hour_starts[channel_id] = now
+
+        # Óraellenőrzés
+        if now - hour_starts[channel_id] >= timedelta(hours=1):
+            hour_starts[channel_id] = now
+            published_counts[channel_id] = 0
+
+        # Publikálás vagy várólistára tétel
+        if published_counts[channel_id] < 10:
+            try:
+                await message.publish()
+                published_counts[channel_id] += 1
+                print(f"[{now.isoformat()}] Üzenet publikálva csatornában {channel.name}: {message.id}")
+            except Exception as e:
+                print(f"Hiba a publish során: {e}")
+                queues[channel_id].append((message, now))
+        else:
+            print(f"[{now.isoformat()}] Limit elérve, üzenet sorba állítva csatornában {channel.name}: {message.id}")
+            queues[channel_id].append((message, now))
+
+@tasks.loop(seconds=10)
+async def process_queue():
+    now = datetime.utcnow()
+    for channel_id, queue in queues.items():
+        if not queue:
+            continue
+
+        # Óraellenőrzés csatornánként
+        if now - hour_starts[channel_id] >= timedelta(hours=1):
+            hour_starts[channel_id] = now
+            published_counts[channel_id] = 0
+
+        # Várólista feldolgozása az óránkénti limitig
+        while queue and published_counts[channel_id] < 10:
+            message, timestamp = queue.popleft()
+            try:
+                await message.publish()
+                published_counts[channel_id] += 1
+                print(f"[{datetime.utcnow().isoformat()}] Várólistás üzenet publikálva csatornában {message.channel.name}: {message.id} (eredeti: {timestamp.isoformat()})")
+            except Exception as e:
+                print(f"Hiba a várólistás publish során: {e}")
+                queue.appendleft((message, timestamp))
+                break
+
+# --- Mini webserver Flask + asyncio ---
+from flask import Flask
+from threading import Thread
+
 app = Flask("")
 
 @app.route("/")
 def home():
-    return "Bot is alive!"
+    return "Bot él!", 200
 
-def run():
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+def run_webserver():
+    port = int(os.environ.get("PORT", 8080))  # Render adja a portot
+    app.run(host="0.0.0.0", port=port)
 
-def keep_alive():
-    t = threading.Thread(target=run)
-    t.start()
+# Webserver indítása külön szálon
+Thread(target=run_webserver).start()
 
-
-# ===== LOAD LIST =====
-def load_list(filename):
-    try:
-        with open(filename, "r") as f:
-            content = f.read()
-            matches = re.findall(r"\[(.*?)\]", content)
-            return [m.strip() for m in matches if m.strip()]
-    except:
-        return []
-
-allowed_servers = load_list("serverid.txt")
-allowed_users = load_list("userid.txt")
-allowed_roles = load_list("rangid.txt")
-
-
-# ===== BOT =====
-intents = discord.Intents.default()
-intents.message_content = True
-intents.members = True
-
-bot = commands.Bot(command_prefix="!", intents=intents)
-
-
-# ===== RATE LIMIT =====
-queue = deque()
-timestamps = deque()  # utolsó crosspost időpontok
-
-
-# ===== PERMISSION =====
-def check_permissions(ctx):
-    if allowed_servers and str(ctx.guild.id) not in allowed_servers:
-        return False, "Ez a szerver nincs engedélyezve!"
-
-    user_ok = str(ctx.author.id) in allowed_users
-    role_ok = any(str(r.id) in allowed_roles or r.name in allowed_roles for r in ctx.author.roles)
-
-    if not (user_ok or role_ok):
-        return False, "Nincs jogod!"
-
-    return True, "OK"
-
-
-# ===== COMMAND =====
-@bot.command()
-async def darky(ctx):
-    ok, reason = check_permissions(ctx)
-    if not ok:
-        await ctx.send(f"❌ {reason}")
-        return
-    await ctx.send("✅ Működik")
-
-
-# ===== MESSAGE =====
-@bot.event
-async def on_message(message):
-    if message.author.bot:
-        return
-
-    # csak announcement csatorna
-    if getattr(message.channel, "is_news", lambda: False)():
-        queue.append({
-            "channel_id": message.channel.id,
-            "content": message.content,
-            "author": message.author.display_name
-        })
-        print(f"[QUEUE] {message.content}")
-
-    await bot.process_commands(message)
-
-
-# ===== WORKER =====
-async def worker():
-    await bot.wait_until_ready()
-
-    while not bot.is_closed():
-        now = time.time()
-
-        # töröljük az 1 óránál régebbi timestamp-eket
-        while timestamps and now - timestamps[0] > 3600:
-            timestamps.popleft()
-
-        # ha van hely (max 10/óra)
-        if len(timestamps) < 10 and queue:
-            data = queue.popleft()
-
-            channel = bot.get_channel(data["channel_id"])
-            if channel:
-                try:
-                    msg = await channel.send(f"**{data['author']}**: {data['content']}")
-                    await msg.crosspost()
-
-                    timestamps.append(time.time())
-
-                    print(f"[OK] Közétéve: {data['content']}")
-
-                except Exception as e:
-                    print(f"[HIBA] {e}")
-
-        await asyncio.sleep(5)  # 5 másodpercenként próbál
-
-
-# ===== READY =====
-@bot.event
-async def on_ready():
-    print(f"[START] {bot.user}")
-    bot.loop.create_task(worker())
-
-
-# ===== MAIN =====
-if __name__ == "__main__":
-    keep_alive()
-
-    TOKEN = os.environ.get("DISCORD_TOKEN")
-
-    if TOKEN:
-        bot.run(TOKEN)
-    else:
-        print("Nincs token!")
+# Bot futtatása
+bot.run(DISCORD_TOKEN)
