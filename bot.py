@@ -1,13 +1,14 @@
 import discord
-from discord.ext import commands, tasks
+from discord.ext import commands
 import os
 from flask import Flask
 import threading
 import re
-from collections import deque
 import asyncio
+import time
+from collections import deque
 
-# ===== FLASK UPTIME =====
+# ===== FLASK =====
 app = Flask("")
 
 @app.route("/")
@@ -22,53 +23,44 @@ def keep_alive():
     t.start()
 
 
-# ===== LOAD LIST WITH [] SUPPORT =====
+# ===== LOAD LIST =====
 def load_list(filename):
     try:
         with open(filename, "r") as f:
             content = f.read()
             matches = re.findall(r"\[(.*?)\]", content)
-            cleaned = [m.strip() for m in matches if m.strip()]
-            print(f"[OK] {filename} betöltve: {cleaned}")
-            return cleaned
-    except FileNotFoundError:
-        print(f"[HIBA] {filename} nem található!")
-        return []
-    except Exception as e:
-        print(f"[HIBA] {filename} olvasási hiba: {e}")
+            return [m.strip() for m in matches if m.strip()]
+    except:
         return []
 
+allowed_servers = load_list("serverid.txt")
+allowed_users = load_list("userid.txt")
+allowed_roles = load_list("rangid.txt")
 
-# ===== CONFIG =====
-allowed_servers = load_list("serverid.txt")  # csak ezekben a szerverekben engedélyezett
-allowed_users = load_list("userid.txt")      # user ID-k
-allowed_roles = load_list("rangid.txt")      # rang ID vagy név
 
-# ===== BOT SETUP =====
+# ===== BOT =====
 intents = discord.Intents.default()
 intents.message_content = True
-intents.guilds = True
 intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# ===== CROSSPOST QUEUE =====
-announcement_queue = deque()
-CROSSPOST_LIMIT = 10  # 10 üzenet / óra
+
+# ===== RATE LIMIT =====
+queue = deque()
+timestamps = deque()  # utolsó crosspost időpontok
 
 
-# ===== PERMISSION CHECK FOR DARKY =====
+# ===== PERMISSION =====
 def check_permissions(ctx):
-    # Csak az adott szerverben engedélyezett
     if allowed_servers and str(ctx.guild.id) not in allowed_servers:
         return False, "Ez a szerver nincs engedélyezve!"
 
-    # USER vagy ROLE elég
-    user_allowed = str(ctx.author.id) in allowed_users
-    roles_allowed = any(str(role.id) in allowed_roles or role.name in allowed_roles for role in ctx.author.roles)
+    user_ok = str(ctx.author.id) in allowed_users
+    role_ok = any(str(r.id) in allowed_roles or r.name in allowed_roles for r in ctx.author.roles)
 
-    if not (user_allowed or roles_allowed):
-        return False, "Nincs engedélyed a parancs használatára!"
+    if not (user_ok or role_ok):
+        return False, "Nincs jogod!"
 
     return True, "OK"
 
@@ -76,62 +68,76 @@ def check_permissions(ctx):
 # ===== COMMAND =====
 @bot.command()
 async def darky(ctx):
-    allowed, reason = check_permissions(ctx)
-    if not allowed:
+    ok, reason = check_permissions(ctx)
+    if not ok:
         await ctx.send(f"❌ {reason}")
-        print(f"[TILTÁS] {ctx.author} → {reason}")
         return
-    await ctx.send(f"✅ {ctx.author.mention} sikeresen használta a !darky parancsot!")
+    await ctx.send("✅ Működik")
 
 
-# ===== AUTOMATIC CROSSPOST =====
+# ===== MESSAGE =====
 @bot.event
 async def on_message(message):
     if message.author.bot:
         return
 
-    # Csak Announcement / News csatornák
+    # csak announcement csatorna
     if getattr(message.channel, "is_news", lambda: False)():
-        if message.channel.permissions_for(message.guild.me).send_messages:
-            announcement_queue.append(message)
+        queue.append({
+            "channel_id": message.channel.id,
+            "content": message.content,
+            "author": message.author.display_name
+        })
+        print(f"[QUEUE] {message.content}")
 
     await bot.process_commands(message)
 
 
-# ===== CROSSPOST WORKER TASK =====
-@tasks.loop(hours=1)
-async def process_crosspost_queue():
-    to_process = min(CROSSPOST_LIMIT, len(announcement_queue))
-    for _ in range(to_process):
-        msg = announcement_queue.popleft()
-        try:
-            # Új üzenet a bot nevében
-            new_msg = await msg.channel.send(f"**{msg.author.display_name}**: {msg.content}")
-            await new_msg.crosspost()
-            print(f"[CROSSPOST] {msg.author} üzenete közzétéve: {msg.channel}")
-        except Exception as e:
-            print(f"[HIBA] Crosspost sikertelen: {e}")
+# ===== WORKER =====
+async def worker():
+    await bot.wait_until_ready()
+
+    while not bot.is_closed():
+        now = time.time()
+
+        # töröljük az 1 óránál régebbi timestamp-eket
+        while timestamps and now - timestamps[0] > 3600:
+            timestamps.popleft()
+
+        # ha van hely (max 10/óra)
+        if len(timestamps) < 10 and queue:
+            data = queue.popleft()
+
+            channel = bot.get_channel(data["channel_id"])
+            if channel:
+                try:
+                    msg = await channel.send(f"**{data['author']}**: {data['content']}")
+                    await msg.crosspost()
+
+                    timestamps.append(time.time())
+
+                    print(f"[OK] Közétéve: {data['content']}")
+
+                except Exception as e:
+                    print(f"[HIBA] {e}")
+
+        await asyncio.sleep(5)  # 5 másodpercenként próbál
 
 
+# ===== READY =====
 @bot.event
 async def on_ready():
-    print(f"[START] {bot.user} elindult!")
-    print("===== BETÖLTÖTT ADATOK =====")
-    print("Servers:", allowed_servers)
-    print("Users:", allowed_users)
-    print("Roles:", allowed_roles)
-    print("============================")
-    process_crosspost_queue.start()  # Indítja az óránkénti crosspost feldolgozást
+    print(f"[START] {bot.user}")
+    bot.loop.create_task(worker())
 
 
 # ===== MAIN =====
 if __name__ == "__main__":
     keep_alive()
 
-    DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
+    TOKEN = os.environ.get("DISCORD_TOKEN")
 
-    if not DISCORD_TOKEN:
-        print("[HIBA] Nincs DISCORD_TOKEN!")
+    if TOKEN:
+        bot.run(TOKEN)
     else:
-        print("[INDÍTÁS] Bot indul...")
-        bot.run(DISCORD_TOKEN)
+        print("Nincs token!")
