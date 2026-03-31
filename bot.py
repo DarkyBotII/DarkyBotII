@@ -5,7 +5,7 @@ from flask import Flask
 import threading
 import re
 
-# ===== UPTIME FLASK APP =====
+# ===== FLASK UPTIME =====
 app = Flask("")
 
 @app.route("/")
@@ -27,22 +27,21 @@ def load_list(filename):
             content = f.read()
             matches = re.findall(r"\[(.*?)\]", content)
             cleaned = [m.strip() for m in matches if m.strip()]
-            
             print(f"[OK] {filename} betöltve: {cleaned}")
             return cleaned
-
     except FileNotFoundError:
         print(f"[HIBA] {filename} nem található!")
         return []
-
     except Exception as e:
         print(f"[HIBA] {filename} olvasási hiba: {e}")
         return []
 
-# ===== LOAD IDS =====
-allowed_servers = load_list("serverid.txt")
-allowed_users = load_list("userid.txt")
-allowed_roles = load_list("rangid.txt")
+
+# ===== CONFIG =====
+allowed_servers = load_list("serverid.txt")  # csak ezekben a szerverekben engedélyezett
+allowed_users = load_list("userid.txt")      # user ID-k
+allowed_roles = load_list("rangid.txt")      # rang ID vagy név
+
 
 # ===== BOT SETUP =====
 intents = discord.Intents.default()
@@ -52,38 +51,45 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# ===== PERMISSION CHECK FOR !darky =====
-def check_permissions(obj):
-    author = obj.author
-    guild = obj.guild
 
-    # SERVER CHECK
-    if allowed_servers:
-        if str(guild.id) not in allowed_servers:
-            return False, "Ez a szerver nincs engedélyezve!"
+# ===== PERMISSION CHECK FOR DARKY =====
+def check_permissions(ctx):
+    # Csak az adott szerverben engedélyezett
+    if allowed_servers and str(ctx.guild.id) not in allowed_servers:
+        return False, "Ez a szerver nincs engedélyezve!"
 
-    # USER CHECK
-    if allowed_users:
-        if str(author.id) not in allowed_users:
-            return False, "Te nem használhatod ezt a parancsot!"
+    # USER vagy ROLE elég
+    user_allowed = str(ctx.author.id) in allowed_users
+    roles_allowed = any(str(role.id) in allowed_roles or role.name in allowed_roles for role in ctx.author.roles)
 
-    # ROLE CHECK
-    if allowed_roles:
-        author_roles = [role.name for role in author.roles] + [str(role.id) for role in author_roles]
-        if not any(r in allowed_roles for r in author_roles):
-            return False, "Nincs megfelelő rangod!"
+    if not (user_allowed or roles_allowed):
+        return False, "Nincs engedélyed a parancs használatára!"
 
     return True, "OK"
 
-# ===== COMMANDS =====
-@bot.command()
-async def ping(ctx):
-    await ctx.send(f"🏓 Pong! Latency: {round(bot.latency*1000)}ms")
 
-@bot.command()
-async def hello(ctx):
-    await ctx.send(f"👋 Szia, {ctx.author.mention}!")
+# ===== AUTOMATIC CROSSPOST =====
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
 
+    # Csak Announcement / News csatornák
+    if getattr(message.channel, "is_news", lambda: False)():
+        # Ellenőrizni, hogy a bot küldhet-e
+        if message.channel.permissions_for(message.guild.me).send_messages:
+            try:
+                # Crosspostolja az üzenetet, mintha manuálisan nyomtad volna
+                await message.crosspost()
+                print(f"[CROSSPOST] {message.author} üzenete közzétéve: {message.channel}")
+            except Exception as e:
+                print(f"[HIBA] Crosspost sikertelen: {e}")
+
+    # Parancsok feldolgozása
+    await bot.process_commands(message)
+
+
+# ===== COMMAND =====
 @bot.command()
 async def darky(ctx):
     allowed, reason = check_permissions(ctx)
@@ -94,30 +100,7 @@ async def darky(ctx):
     await ctx.send(f"✅ {ctx.author.mention} sikeresen használta a !darky parancsot!")
 
 
-# ===== AUTOMATIC CROSSPOST IN ANNOUNCEMENT CHANNELS =====
-@bot.event
-async def on_message(message):
-    if message.author.bot:
-        return
-
-    # Ellenőrizzük, hogy a bot tud-e üzenetet küldeni
-    if message.channel.permissions_for(message.guild.me).send_messages:
-        # Ha Announcement Channel
-        if getattr(message.channel, "is_news", lambda: False)():
-            msg = await message.channel.send(f"**{message.author.display_name}**: {message.content}")
-            try:
-                await msg.crosspost()  # Közzéteszi a követő szervereknek
-            except Exception as e:
-                print(f"[HIBA] Crosspost sikertelen: {e}")
-        else:
-            # Normál szöveges csatorna
-            await message.channel.send(f"**{message.author.display_name}**: {message.content}")
-
-    # Parancsok feldolgozása
-    await bot.process_commands(message)
-
-
-# ===== EVENTS =====
+# ===== BOT READY =====
 @bot.event
 async def on_ready():
     print(f"[START] {bot.user} elindult!")
@@ -139,4 +122,3 @@ if __name__ == "__main__":
     else:
         print("[INDÍTÁS] Bot indul...")
         bot.run(DISCORD_TOKEN)
-
