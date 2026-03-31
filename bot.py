@@ -1,9 +1,11 @@
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 import os
 from flask import Flask
 import threading
 import re
+from collections import deque
+import asyncio
 
 # ===== FLASK UPTIME =====
 app = Flask("")
@@ -42,7 +44,6 @@ allowed_servers = load_list("serverid.txt")  # csak ezekben a szerverekben enged
 allowed_users = load_list("userid.txt")      # user ID-k
 allowed_roles = load_list("rangid.txt")      # rang ID vagy név
 
-
 # ===== BOT SETUP =====
 intents = discord.Intents.default()
 intents.message_content = True
@@ -50,6 +51,10 @@ intents.guilds = True
 intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
+
+# ===== CROSSPOST QUEUE =====
+announcement_queue = deque()
+CROSSPOST_LIMIT = 10  # 10 üzenet / óra
 
 
 # ===== PERMISSION CHECK FOR DARKY =====
@@ -68,27 +73,6 @@ def check_permissions(ctx):
     return True, "OK"
 
 
-# ===== AUTOMATIC CROSSPOST =====
-@bot.event
-async def on_message(message):
-    if message.author.bot:
-        return
-
-    # Csak Announcement / News csatornák
-    if getattr(message.channel, "is_news", lambda: False)():
-        # Ellenőrizni, hogy a bot küldhet-e
-        if message.channel.permissions_for(message.guild.me).send_messages:
-            try:
-                # Crosspostolja az üzenetet, mintha manuálisan nyomtad volna
-                await message.crosspost()
-                print(f"[CROSSPOST] {message.author} üzenete közzétéve: {message.channel}")
-            except Exception as e:
-                print(f"[HIBA] Crosspost sikertelen: {e}")
-
-    # Parancsok feldolgozása
-    await bot.process_commands(message)
-
-
 # ===== COMMAND =====
 @bot.command()
 async def darky(ctx):
@@ -100,7 +84,35 @@ async def darky(ctx):
     await ctx.send(f"✅ {ctx.author.mention} sikeresen használta a !darky parancsot!")
 
 
-# ===== BOT READY =====
+# ===== AUTOMATIC CROSSPOST =====
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+
+    # Csak Announcement / News csatornák
+    if getattr(message.channel, "is_news", lambda: False)():
+        if message.channel.permissions_for(message.guild.me).send_messages:
+            announcement_queue.append(message)
+
+    await bot.process_commands(message)
+
+
+# ===== CROSSPOST WORKER TASK =====
+@tasks.loop(hours=1)
+async def process_crosspost_queue():
+    to_process = min(CROSSPOST_LIMIT, len(announcement_queue))
+    for _ in range(to_process):
+        msg = announcement_queue.popleft()
+        try:
+            # Új üzenet a bot nevében
+            new_msg = await msg.channel.send(f"**{msg.author.display_name}**: {msg.content}")
+            await new_msg.crosspost()
+            print(f"[CROSSPOST] {msg.author} üzenete közzétéve: {msg.channel}")
+        except Exception as e:
+            print(f"[HIBA] Crosspost sikertelen: {e}")
+
+
 @bot.event
 async def on_ready():
     print(f"[START] {bot.user} elindult!")
@@ -109,6 +121,7 @@ async def on_ready():
     print("Users:", allowed_users)
     print("Roles:", allowed_roles)
     print("============================")
+    process_crosspost_queue.start()  # Indítja az óránkénti crosspost feldolgozást
 
 
 # ===== MAIN =====
