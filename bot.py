@@ -1,30 +1,35 @@
 import discord
 from discord.ext import tasks
-import asyncio
 from collections import deque
 from datetime import datetime, timedelta
 import os
-from dotenv import load_dotenv
 
+# A dotenv csak lokális fejlesztéshez kell, Render-en a környezeti változókat használjuk
+from dotenv import load_dotenv
 load_dotenv()
 
+# Token beolvasása környezeti változóból
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+if not DISCORD_TOKEN:
+    raise ValueError("A DISCORD_TOKEN nincs beállítva. Ellenőrizd az Environment Variable-t!")
 
+# Intents beállítása
 intents = discord.Intents.default()
 intents.guilds = True
 intents.messages = True
 intents.message_content = True
 
+# Bot létrehozása
 bot = discord.Bot(intents=intents)
 
-# Várólista: csatornánként
-queues = {}  # pl. queues[channel_id] = deque([(message, timestamp), ...])
+# Csatornánkénti várólista és óra alapú publikálás követése
+queues = {}            # queues[channel_id] = deque([(message, timestamp), ...])
 published_counts = {}  # csatornánként
 hour_starts = {}       # csatornánként
 
 @bot.event
 async def on_ready():
-    print(f'Bot készen áll! Bejelentkezve mint {bot.user}')
+    print(f"Bot készen áll! Bejelentkezve mint {bot.user}")
     process_queue.start()
 
 @bot.event
@@ -36,25 +41,26 @@ async def on_message(message):
 
     # Csak announcement csatornákban próbálkozunk
     if isinstance(channel, discord.TextChannel) and channel.is_news():
-        # Ellenőrizzük, van-e publish jogunk
         perms = channel.permissions_for(channel.guild.me)
         if not perms.manage_messages:
+            # Ha nincs jog a publish-hoz, kilépünk
             return
 
         now = datetime.utcnow()
         channel_id = channel.id
 
-        # Inicializálás, ha még nincs
+        # Inicializálás, ha még nincs csatornához adat
         if channel_id not in queues:
             queues[channel_id] = deque()
             published_counts[channel_id] = 0
             hour_starts[channel_id] = now
 
-        # Óraellenőrzés
+        # Óraellenőrzés: ha eltelt 1 óra, reseteljük a számlálót
         if now - hour_starts[channel_id] >= timedelta(hours=1):
             hour_starts[channel_id] = now
             published_counts[channel_id] = 0
 
+        # Publikálás vagy várólistára tétel
         if published_counts[channel_id] < 10:
             try:
                 await message.publish()
@@ -79,6 +85,7 @@ async def process_queue():
             hour_starts[channel_id] = now
             published_counts[channel_id] = 0
 
+        # Várólista feldolgozása az óránkénti limitig
         while queue and published_counts[channel_id] < 10:
             message, timestamp = queue.popleft()
             try:
@@ -90,4 +97,5 @@ async def process_queue():
                 queue.appendleft((message, timestamp))
                 break
 
+# Bot futtatása
 bot.run(DISCORD_TOKEN)
