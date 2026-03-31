@@ -3,71 +3,91 @@ from discord.ext import tasks
 import asyncio
 from collections import deque
 from datetime import datetime, timedelta
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 
 intents = discord.Intents.default()
-intents.message_content = True
 intents.guilds = True
 intents.messages = True
+intents.message_content = True
 
 bot = discord.Bot(intents=intents)
 
-# Csatorna ID, ahol figyelni akarjuk az üzeneteket
-ANNOUNCEMENT_CHANNEL_ID = 123456789012345678  # cseréld a saját ID-dra
-
-# Üzenet várólista: minden elem (message, timestamp)
-queue = deque()
-
-# Időbélyeg és counter a limithez
-published_count = 0
-hour_start = datetime.utcnow()
+# Várólista: csatornánként
+queues = {}  # pl. queues[channel_id] = deque([(message, timestamp), ...])
+published_counts = {}  # csatornánként
+hour_starts = {}       # csatornánként
 
 @bot.event
 async def on_ready():
     print(f'Bot készen áll! Bejelentkezve mint {bot.user}')
-    process_queue.start()  # elindítjuk a várólista feldolgozást
+    process_queue.start()
 
 @bot.event
 async def on_message(message):
-    global published_count, hour_start
-    if message.channel.id != ANNOUNCEMENT_CHANNEL_ID:
-        return
     if message.author == bot.user:
         return
 
-    now = datetime.utcnow()
-    if now - hour_start >= timedelta(hours=1):
-        hour_start = now
-        published_count = 0
+    channel = message.channel
 
-    if published_count < 10:
-        try:
-            await message.publish()
-            published_count += 1
-            print(f"[{now.isoformat()}] Üzenet publikálva: {message.id}")
-        except Exception as e:
-            print(f"Hiba a publish során: {e}")
-            queue.append((message, now))
-    else:
-        print(f"[{now.isoformat()}] Limit elérve, üzenet sorba állítva: {message.id}")
-        queue.append((message, now))
+    # Csak announcement csatornákban próbálkozunk
+    if isinstance(channel, discord.TextChannel) and channel.is_news():
+        # Ellenőrizzük, van-e publish jogunk
+        perms = channel.permissions_for(channel.guild.me)
+        if not perms.manage_messages:
+            return
+
+        now = datetime.utcnow()
+        channel_id = channel.id
+
+        # Inicializálás, ha még nincs
+        if channel_id not in queues:
+            queues[channel_id] = deque()
+            published_counts[channel_id] = 0
+            hour_starts[channel_id] = now
+
+        # Óraellenőrzés
+        if now - hour_starts[channel_id] >= timedelta(hours=1):
+            hour_starts[channel_id] = now
+            published_counts[channel_id] = 0
+
+        if published_counts[channel_id] < 10:
+            try:
+                await message.publish()
+                published_counts[channel_id] += 1
+                print(f"[{now.isoformat()}] Üzenet publikálva csatornában {channel.name}: {message.id}")
+            except Exception as e:
+                print(f"Hiba a publish során: {e}")
+                queues[channel_id].append((message, now))
+        else:
+            print(f"[{now.isoformat()}] Limit elérve, üzenet sorba állítva csatornában {channel.name}: {message.id}")
+            queues[channel_id].append((message, now))
 
 @tasks.loop(seconds=10)
 async def process_queue():
-    global published_count, hour_start
     now = datetime.utcnow()
-    if now - hour_start >= timedelta(hours=1):
-        hour_start = now
-        published_count = 0
+    for channel_id, queue in queues.items():
+        if not queue:
+            continue
 
-    while queue and published_count < 10:
-        message, timestamp = queue.popleft()
-        try:
-            await message.publish()
-            published_count += 1
-            print(f"[{datetime.utcnow().isoformat()}] Várólistás üzenet publikálva: {message.id} (eredeti érkezés: {timestamp.isoformat()})")
-        except Exception as e:
-            print(f"Hiba a várólistás publish során: {e}")
-            queue.appendleft((message, timestamp))  # ha hiba, visszatesszük a queue elejére
-            break  # ha hiba van, várjunk a következő ciklusra
+        # Óraellenőrzés csatornánként
+        if now - hour_starts[channel_id] >= timedelta(hours=1):
+            hour_starts[channel_id] = now
+            published_counts[channel_id] = 0
 
-bot.run("YOUR_BOT_TOKEN_HERE")
+        while queue and published_counts[channel_id] < 10:
+            message, timestamp = queue.popleft()
+            try:
+                await message.publish()
+                published_counts[channel_id] += 1
+                print(f"[{datetime.utcnow().isoformat()}] Várólistás üzenet publikálva csatornában {message.channel.name}: {message.id} (eredeti: {timestamp.isoformat()})")
+            except Exception as e:
+                print(f"Hiba a várólistás publish során: {e}")
+                queue.appendleft((message, timestamp))
+                break
+
+bot.run(DISCORD_TOKEN)
