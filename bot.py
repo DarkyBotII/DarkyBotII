@@ -1,11 +1,11 @@
 import discord
-from discord.ext import tasks, commands
+from discord.ext import tasks
 from collections import deque
 from datetime import datetime, timedelta
 import os
 from dotenv import load_dotenv
 
-# Lokális fejlesztéshez
+# Csak lokális fejlesztéshez, Render-en az env változóból veszi a tokent
 load_dotenv()
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
@@ -16,22 +16,21 @@ if not DISCORD_TOKEN:
 intents = discord.Intents.default()
 intents.guilds = True
 intents.messages = True
-intents.message_content = True
+intents.message_content = True  # fontos, hogy a parancsokat olvassa
 
-# Bot létrehozása commands.Bot-tal
-bot = commands.Bot(command_prefix="!", intents=intents)
+# Bot létrehozása
+bot = discord.Client(intents=intents)
 
-# Csatornánkénti várólista és óránkénti limit
-queues = {}
-published_counts = {}
-hour_starts = {}
+# Várólista csatornánként
+queues = {}            # queues[channel_id] = deque([(message, timestamp), ...])
+published_counts = {}  # csatornánként
+hour_starts = {}       # csatornánként
 
 @bot.event
 async def on_ready():
     print(f"Bot készen áll! Bejelentkezve mint {bot.user}")
     process_queue.start()
 
-# Announcement csatornák publish logika
 @bot.event
 async def on_message(message):
     if message.author == bot.user:
@@ -39,11 +38,16 @@ async def on_message(message):
 
     channel = message.channel
 
-    # !darky parancs
+    # ------------------------------
+    # Parancs: !darky → zöld pipa
+    # ------------------------------
     if message.content.strip().lower() == "!darky":
         await channel.send("✅")
         return
 
+    # ------------------------------
+    # Announcement csatorna publish
+    # ------------------------------
     if isinstance(channel, discord.TextChannel) and channel.is_news():
         perms = channel.permissions_for(channel.guild.me)
         if not perms.manage_messages:
@@ -70,6 +74,7 @@ async def on_message(message):
                 print(f"Hiba a publish során: {e}")
                 queues[channel_id].append((message, now))
         else:
+            print(f"[{now.isoformat()}] Limit elérve, üzenet sorba állítva csatornában {channel.name}: {message.id}")
             queues[channel_id].append((message, now))
 
 @tasks.loop(seconds=10)
@@ -78,6 +83,7 @@ async def process_queue():
     for channel_id, queue in queues.items():
         if not queue:
             continue
+
         if now - hour_starts[channel_id] >= timedelta(hours=1):
             hour_starts[channel_id] = now
             published_counts[channel_id] = 0
@@ -87,10 +93,11 @@ async def process_queue():
             try:
                 await message.publish()
                 published_counts[channel_id] += 1
-                print(f"[{datetime.utcnow().isoformat()}] Várólistás üzenet publikálva csatornában {message.channel.name}: {message.id}")
+                print(f"[{datetime.utcnow().isoformat()}] Várólistás üzenet publikálva csatornában {message.channel.name}: {message.id} (eredeti: {timestamp.isoformat()})")
             except Exception as e:
                 print(f"Hiba a várólistás publish során: {e}")
                 queue.appendleft((message, timestamp))
                 break
 
+# Bot futtatása
 bot.run(DISCORD_TOKEN)
