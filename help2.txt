@@ -1,2 +1,10 @@
 Szia, ha aktiv vagyok a szervereden ezeket a kódokat tudod használni.
-:)
+
+
+!darky – Egyszerű tesztparancs, visszaküld egy ✅ jelet. (nincs engedély)
+!dbserverid – Ellenőrzi, hogy a szerver engedélyezett-e; jog nélküli felhasználók is használhatják. (nincs engedély)
+!dbuserid – Ellenőrzi, hogy a felhasználó engedélyezett-e a bot használatára. (kell engedély: felhasználó ID vagy rang a userid.txt / rangid.txt-ben)
+!dbon – Bekapcsolja a maradék publish számlálót az aktuális bejelentés csatornában. (kell engedély: engedélyezett szerver + felhasználó ID vagy rang)
+!dboff – Kikapcsolja a maradék publish számlálót az aktuális bejelentés csatornában. (kell engedély: engedélyezett szerver + felhasználó ID vagy rang)
+!dbhelp2 – Szép embedben jeleníti meg a help2.txt tartalmát. (kell engedély: engedélyezett szerver + felhasználó ID vagy rang)
+!dbidlist – Embedben listázza az engedélyezett szerverek és felhasználók neveit (ID nélkül). (kell engedély: engedélyezett szerver + felhasználó ID vagy rang)
