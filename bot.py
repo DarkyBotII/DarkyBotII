@@ -11,22 +11,31 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 if not DISCORD_TOKEN:
     raise ValueError("A DISCORD_TOKEN nincs beállítva!")
 
-# 🔗 GitHub RAW base URL (EZT ÁLLÍTSD BE!)
-GITHUB_BASE = "https://raw.githubusercontent.com/FELHASZNALO/REPO/main/"
+# ✅ HELYES GITHUB LINK
+GITHUB_BASE = "https://raw.githubusercontent.com/DarkyBotII/DarkyBotII/main/"
 
 def load_txt(filename):
     try:
         url = GITHUB_BASE + filename
+        print(f"Betöltés: {url}")
+
         response = requests.get(url)
+
         if response.status_code == 200:
-            return [line.strip() for line in response.text.splitlines() if line.strip()]
-        return []
+            lines = [line.strip() for line in response.text.splitlines() if line.strip()]
+            print(f"Siker: {lines}")
+            return lines
+        else:
+            print(f"HIBA {filename}: {response.status_code}")
+            return []
+
     except Exception as e:
         print(f"TXT hiba: {e}")
         return []
 
 def is_server_allowed(guild_id):
-    return str(guild_id) in load_txt("serverid.txt")
+    server_ids = load_txt("serverid.txt")
+    return str(guild_id).strip() in [x.strip() for x in server_ids]
 
 def is_user_allowed(member):
     user_ids = load_txt("userid.txt")
@@ -61,7 +70,7 @@ async def on_message(message):
     if message.author == bot.user:
         return
 
-    # ❗ szerver tiltás
+    # ❗ csak dbserverid ha nincs engedély
     if message.guild:
         if not is_server_allowed(message.guild.id):
             if message.content.strip().lower() != "!dbserverid":
@@ -73,6 +82,7 @@ async def on_message(message):
 
     channel = message.channel
 
+    # 📢 announcement kezelés
     if isinstance(channel, discord.TextChannel) and channel.is_news():
         perms = channel.permissions_for(channel.guild.me)
 
@@ -134,7 +144,6 @@ async def dboff(ctx):
     channel_toggle[ctx.channel.id] = False
     await ctx.send("🔴 Kikapcsolva")
 
-# 🎨 SZÉP EMBED HELP
 @bot.command()
 async def dbhelp2(ctx):
     try:
@@ -148,11 +157,14 @@ async def dbhelp2(ctx):
         )
 
         embed.set_footer(text="Darky rendszer • segítség")
-        embed.set_author(name=ctx.guild.name, icon_url=ctx.guild.icon.url if ctx.guild.icon else None)
+        embed.set_author(
+            name=ctx.guild.name,
+            icon_url=ctx.guild.icon.url if ctx.guild.icon else None
+        )
 
         await ctx.send(embed=embed)
 
-    except Exception as e:
+    except Exception:
         await ctx.send("❌ Hiba a help betöltésekor")
 
 # ---------------- WEB SERVER ----------------
