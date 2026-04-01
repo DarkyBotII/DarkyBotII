@@ -20,12 +20,9 @@ GITHUB_BASE = "https://raw.githubusercontent.com/DarkyBotII/DarkyBotII/main/"
 def load_txt(filename):
     try:
         url = GITHUB_BASE + filename
-        print(f"Betöltés: {url}")
         response = requests.get(url)
         if response.status_code == 200:
-            lines = [line.strip() for line in response.text.splitlines() if line.strip()]
-            print(f"Siker: {lines}")
-            return lines
+            return [line.strip() for line in response.text.splitlines() if line.strip()]
         else:
             print(f"HIBA {filename}: {response.status_code}")
             return []
@@ -90,19 +87,22 @@ async def on_message(message):
     if message.author == bot.user:
         return
 
+    # Parancsok mindenképp kezelve a végén
+    content_lower = message.content.strip().lower()
+
     # !darky parancs
-    if message.content.strip().lower() == "!darky":
+    if content_lower == "!darky":
         await message.channel.send("✅")
 
     channel = message.channel
 
-    # csak announcement csatorna publish logika
+    # Announcement csatorna publish logika
     if isinstance(channel, discord.TextChannel) and channel.is_news():
         perms = channel.permissions_for(channel.guild.me)
         if not (perms.send_messages and perms.manage_messages):
             return
 
-        # csak publish-re vonatkozó tiltások
+        # Csak publish-re vonatkozó tiltások
         if is_message_banned(message):
             print(f"Üzenet kihagyva (banned/parancs): {message.id}")
         else:
@@ -124,19 +124,29 @@ async def on_message(message):
                 except Exception as e:
                     print(f"Hiba publish: {e}")
 
-    # parancsok mindig futnak minden csatornában
+    # ⚡ Parancsok mindig futnak minden csatornában
     await bot.process_commands(message)
 
 # ---------- COMMANDS ----------
 @bot.command()
 async def dbserverid(ctx):
+    """Ellenőrzi, hogy a szerver engedélyezett-e"""
     if is_server_allowed(ctx.guild.id):
         await ctx.send("🟢 Engedélyezett szerver")
     else:
         await ctx.send("🔴 Nincs engedélyezve")
 
 @bot.command()
+async def dbuserid(ctx):
+    """Ellenőrzi, hogy a felhasználó engedélyezett-e"""
+    if is_user_allowed(ctx.author):
+        await ctx.send(f"🟢 {ctx.author.mention} – Engedélyezve")
+    else:
+        await ctx.send(f"🔴 {ctx.author.mention} – Nincs engedély")
+
+@bot.command()
 async def dbon(ctx):
+    """Bekapcsolja a maradék publish számlálót az aktuális csatornában"""
     if not is_server_allowed(ctx.guild.id):
         return
     if not is_user_allowed(ctx.author):
@@ -146,6 +156,7 @@ async def dbon(ctx):
 
 @bot.command()
 async def dboff(ctx):
+    """Kikapcsolja a maradék publish számlálót az aktuális csatornában"""
     if not is_server_allowed(ctx.guild.id):
         return
     if not is_user_allowed(ctx.author):
@@ -166,6 +177,27 @@ async def dbhelp2(ctx):
         color=discord.Color.blue()
     )
     embed.set_footer(text="Darky rendszer • segítség")
+    icon_url = ctx.guild.icon.url if ctx.guild and ctx.guild.icon else None
+    embed.set_author(name=ctx.guild.name if ctx.guild else "DarkyBot", icon_url=icon_url)
+    await ctx.send(embed=embed)
+
+@bot.command()
+async def dbidlist(ctx):
+    """Listázza az engedélyezett szerverek és felhasználók neveit embedben"""
+    server_lines = load_txt("serverid.txt")
+    server_names = [server_lines[i].strip() for i in range(0, len(server_lines)-1, 2)]
+
+    user_lines = load_txt("userid.txt")
+    user_names = [user_lines[i].strip() for i in range(0, len(user_lines)-1, 2)]
+
+    embed = discord.Embed(
+        title="📋 Engedélyezett ID Lista",
+        color=discord.Color.green()
+    )
+    embed.add_field(name="🏰 Engedélyezett szerverek", value="\n".join(server_names) if server_names else "Nincs szerver", inline=False)
+    embed.add_field(name="👤 Engedélyezett felhasználók", value="\n".join(user_names) if user_names else "Nincs felhasználó", inline=False)
+
+    embed.set_footer(text="Darky rendszer • ID lista")
     icon_url = ctx.guild.icon.url if ctx.guild and ctx.guild.icon else None
     embed.set_author(name=ctx.guild.name if ctx.guild else "DarkyBot", icon_url=icon_url)
     await ctx.send(embed=embed)
