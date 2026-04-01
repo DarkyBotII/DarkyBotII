@@ -50,7 +50,7 @@ def is_user_allowed(member):
 
 # ---------- TILTOTT ÜZENETEK ----------
 def is_message_banned(message):
-    # 1. Parancsok tiltása
+    # 1. Parancsok tiltása a publish-re
     if message.content.strip().startswith("!"):
         return True
     # 2. Felhasználói tiltás
@@ -60,9 +60,8 @@ def is_message_banned(message):
     # 3. Rang tiltás
     banned_roles = load_ban_txt("rangban.txt")
     user_roles = [role.name for role in message.author.roles]
-    for role in user_roles:
-        if role in banned_roles:
-            return True
+    if any(role in banned_roles for role in user_roles):
+        return True
     return False
 
 # ---------- BOT BEÁLLÍTÁS ----------
@@ -87,7 +86,6 @@ async def on_message(message):
     if message.author == bot.user:
         return
 
-    # Parancsok mindenképp kezelve a végén
     content_lower = message.content.strip().lower()
 
     # !darky parancs
@@ -102,7 +100,6 @@ async def on_message(message):
         if not (perms.send_messages and perms.manage_messages):
             return
 
-        # Csak publish-re vonatkozó tiltások
         if is_message_banned(message):
             print(f"Üzenet kihagyva (banned/parancs): {message.id}")
         else:
@@ -124,13 +121,13 @@ async def on_message(message):
                 except Exception as e:
                     print(f"Hiba publish: {e}")
 
-    # ⚡ Parancsok mindig futnak minden csatornában
+    # Parancsok minden csatornában futnak
     await bot.process_commands(message)
 
 # ---------- COMMANDS ----------
 @bot.command()
 async def dbserverid(ctx):
-    """Ellenőrzi, hogy a szerver engedélyezett-e"""
+    """Mindenki számára: Ellenőrzi, hogy a szerver engedélyezett-e"""
     if is_server_allowed(ctx.guild.id):
         await ctx.send("🟢 Engedélyezett szerver")
     else:
@@ -138,7 +135,7 @@ async def dbserverid(ctx):
 
 @bot.command()
 async def dbuserid(ctx):
-    """Ellenőrzi, hogy a felhasználó engedélyezett-e"""
+    """Mindenki számára: Ellenőrzi, hogy a felhasználó engedélyezett-e"""
     if is_user_allowed(ctx.author):
         await ctx.send(f"🟢 {ctx.author.mention} – Engedélyezve")
     else:
