@@ -13,7 +13,7 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 if not DISCORD_TOKEN:
     raise ValueError("A DISCORD_TOKEN nincs beállítva!")
 
-# ✅ HELYES GITHUB BASE URL
+# GitHub base URL
 GITHUB_BASE = "https://raw.githubusercontent.com/DarkyBotII/DarkyBotII/main/"
 
 # ---------- TXT BETÖLTÉS ----------
@@ -21,9 +21,7 @@ def load_txt(filename):
     try:
         url = GITHUB_BASE + filename
         print(f"Betöltés: {url}")
-
         response = requests.get(url)
-
         if response.status_code == 200:
             lines = [line.strip() for line in response.text.splitlines() if line.strip()]
             print(f"Siker: {lines}")
@@ -31,7 +29,6 @@ def load_txt(filename):
         else:
             print(f"HIBA {filename}: {response.status_code}")
             return []
-
     except Exception as e:
         print(f"TXT betöltési hiba: {e}")
         return []
@@ -47,34 +44,28 @@ def is_server_allowed(guild_id):
 def is_user_allowed(member):
     user_ids = load_txt("userid.txt")
     role_names = load_txt("rangid.txt")
-
     if str(member.id) in user_ids:
         return True
-
     for role in member.roles:
         if role.name in role_names:
             return True
-
     return False
 
 # ---------- TILTOTT ÜZENETEK ----------
 def is_message_banned(message):
-    # 1. Parancsok (!-el kezdődő)
+    # 1. Parancsok tiltása
     if message.content.strip().startswith("!"):
         return True
-
     # 2. Felhasználói tiltás
     banned_users = load_ban_txt("userban.txt")
     if str(message.author.id) in banned_users:
         return True
-
     # 3. Rang tiltás
     banned_roles = load_ban_txt("rangban.txt")
     user_roles = [role.name for role in message.author.roles]
     for role in user_roles:
         if role in banned_roles:
             return True
-
     return False
 
 # ---------- BOT BEÁLLÍTÁS ----------
@@ -82,7 +73,6 @@ intents = discord.Intents.default()
 intents.guilds = True
 intents.messages = True
 intents.message_content = True
-
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 published_counts = {}
@@ -100,51 +90,41 @@ async def on_message(message):
     if message.author == bot.user:
         return
 
-    # ❗ csak dbserverid ha nincs engedélyezve
-    if message.guild:
-        if not is_server_allowed(message.guild.id):
-            if message.content.strip().lower() != "!dbserverid":
-                return
-
     # !darky parancs
     if message.content.strip().lower() == "!darky":
         await message.channel.send("✅")
 
-    # announcement csatorna
     channel = message.channel
+
+    # csak announcement csatorna publish logika
     if isinstance(channel, discord.TextChannel) and channel.is_news():
         perms = channel.permissions_for(channel.guild.me)
         if not (perms.send_messages and perms.manage_messages):
             return
 
-        # nem publishelünk tiltott üzeneteket
+        # csak publish-re vonatkozó tiltások
         if is_message_banned(message):
             print(f"Üzenet kihagyva (banned/parancs): {message.id}")
-            return
+        else:
+            now = datetime.utcnow()
+            cid = channel.id
+            if cid not in published_counts:
+                published_counts[cid] = 0
+                hour_starts[cid] = now
+            if now - hour_starts[cid] >= timedelta(hours=1):
+                hour_starts[cid] = now
+                published_counts[cid] = 0
+            if published_counts[cid] < 10:
+                try:
+                    await message.publish()
+                    published_counts[cid] += 1
+                    if channel_toggle.get(cid, False):
+                        remaining = 10 - published_counts[cid]
+                        await channel.send(f"📢 Maradék publish: {remaining}/10")
+                except Exception as e:
+                    print(f"Hiba publish: {e}")
 
-        now = datetime.utcnow()
-        cid = channel.id
-
-        if cid not in published_counts:
-            published_counts[cid] = 0
-            hour_starts[cid] = now
-
-        if now - hour_starts[cid] >= timedelta(hours=1):
-            hour_starts[cid] = now
-            published_counts[cid] = 0
-
-        if published_counts[cid] < 10:
-            try:
-                await message.publish()
-                published_counts[cid] += 1
-
-                if channel_toggle.get(cid, False):
-                    remaining = 10 - published_counts[cid]
-                    await channel.send(f"📢 Maradék publish: {remaining}/10")
-
-            except Exception as e:
-                print(f"Hiba publish: {e}")
-
+    # parancsok mindig futnak minden csatornában
     await bot.process_commands(message)
 
 # ---------- COMMANDS ----------
@@ -161,7 +141,6 @@ async def dbon(ctx):
         return
     if not is_user_allowed(ctx.author):
         return
-
     channel_toggle[ctx.channel.id] = True
     await ctx.send("🟢 Bekapcsolva")
 
@@ -171,18 +150,15 @@ async def dboff(ctx):
         return
     if not is_user_allowed(ctx.author):
         return
-
     channel_toggle[ctx.channel.id] = False
     await ctx.send("🔴 Kikapcsolva")
 
 @bot.command()
 async def dbhelp2(ctx):
     help_lines = load_txt("help2.txt")
-
     if not help_lines:
         await ctx.send("❌ Nem található a help2.txt vagy üres!")
         return
-
     description = "\n".join(help_lines)
     embed = discord.Embed(
         title="📘 DarkyBot Help",
@@ -190,29 +166,18 @@ async def dbhelp2(ctx):
         color=discord.Color.blue()
     )
     embed.set_footer(text="Darky rendszer • segítség")
-
-    icon_url = None
-    if ctx.guild and ctx.guild.icon:
-        icon_url = ctx.guild.icon.url
-
-    if icon_url:
-        embed.set_author(name=ctx.guild.name, icon_url=icon_url)
-    else:
-        embed.set_author(name=ctx.guild.name if ctx.guild else "DarkyBot")
-
+    icon_url = ctx.guild.icon.url if ctx.guild and ctx.guild.icon else None
+    embed.set_author(name=ctx.guild.name if ctx.guild else "DarkyBot", icon_url=icon_url)
     await ctx.send(embed=embed)
 
 # ---------- MINI WEBSERVER ----------
 app = Flask("")
-
 @app.route("/")
 def home():
     return "Bot él!", 200
-
 def run_webserver():
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
-
 Thread(target=run_webserver).start()
 
 # ---------- RUN BOT ----------
