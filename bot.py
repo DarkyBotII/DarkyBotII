@@ -3,20 +3,17 @@ from discord.ext import commands
 from datetime import datetime, timedelta
 import os
 import requests
-from dotenv import load_dotenv
-from flask import Flask
-from threading import Thread
 
+from dotenv import load_dotenv
 load_dotenv()
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 if not DISCORD_TOKEN:
     raise ValueError("A DISCORD_TOKEN nincs beállítva!")
 
-# ✅ HELYES GITHUB BASE URL
+# ✅ HELYES GITHUB LINK
 GITHUB_BASE = "https://raw.githubusercontent.com/DarkyBotII/DarkyBotII/main/"
 
-# ---------- TXT BETÖLTÉS ----------
 def load_txt(filename):
     try:
         url = GITHUB_BASE + filename
@@ -33,13 +30,9 @@ def load_txt(filename):
             return []
 
     except Exception as e:
-        print(f"TXT betöltési hiba: {e}")
+        print(f"TXT hiba: {e}")
         return []
 
-def load_ban_txt(filename):
-    return load_txt(filename)
-
-# ---------- JOGOSULTSÁGOK ----------
 def is_server_allowed(guild_id):
     server_ids = load_txt("serverid.txt")
     return str(guild_id).strip() in [x.strip() for x in server_ids]
@@ -57,27 +50,6 @@ def is_user_allowed(member):
 
     return False
 
-# ---------- TILTOTT ÜZENETEK ----------
-def is_message_banned(message):
-    # 1. Parancsok (!-el kezdődő)
-    if message.content.strip().startswith("!"):
-        return True
-
-    # 2. Felhasználói tiltás
-    banned_users = load_ban_txt("userban.txt")
-    if str(message.author.id) in banned_users:
-        return True
-
-    # 3. Rang tiltás
-    banned_roles = load_ban_txt("rangban.txt")
-    user_roles = [role.name for role in message.author.roles]
-    for role in user_roles:
-        if role in banned_roles:
-            return True
-
-    return False
-
-# ---------- BOT BEÁLLÍTÁS ----------
 intents = discord.Intents.default()
 intents.guilds = True
 intents.messages = True
@@ -89,37 +61,32 @@ published_counts = {}
 hour_starts = {}
 channel_toggle = {}
 
-# ---------- EVENT: READY ----------
 @bot.event
 async def on_ready():
-    print(f"Bot készen áll! Bejelentkezve mint {bot.user}")
+    print(f"Bot készen áll! {bot.user}")
 
-# ---------- EVENT: ON_MESSAGE ----------
 @bot.event
 async def on_message(message):
     if message.author == bot.user:
         return
 
-    # ❗ csak dbserverid ha nincs engedélyezve
+    # ❗ csak dbserverid ha nincs engedély
     if message.guild:
         if not is_server_allowed(message.guild.id):
             if message.content.strip().lower() != "!dbserverid":
                 return
 
-    # !darky parancs
+    # !darky
     if message.content.strip().lower() == "!darky":
         await message.channel.send("✅")
 
-    # announcement csatorna
     channel = message.channel
+
+    # 📢 announcement kezelés
     if isinstance(channel, discord.TextChannel) and channel.is_news():
         perms = channel.permissions_for(channel.guild.me)
-        if not (perms.send_messages and perms.manage_messages):
-            return
 
-        # nem publishelünk tiltott üzeneteket
-        if is_message_banned(message):
-            print(f"Üzenet kihagyva (banned/parancs): {message.id}")
+        if not (perms.send_messages and perms.manage_messages):
             return
 
         now = datetime.utcnow()
@@ -138,6 +105,7 @@ async def on_message(message):
                 await message.publish()
                 published_counts[cid] += 1
 
+                # 📊 maradék számláló
                 if channel_toggle.get(cid, False):
                     remaining = 10 - published_counts[cid]
                     await channel.send(f"📢 Maradék publish: {remaining}/10")
@@ -147,7 +115,8 @@ async def on_message(message):
 
     await bot.process_commands(message)
 
-# ---------- COMMANDS ----------
+# ---------------- COMMANDS ----------------
+
 @bot.command()
 async def dbserverid(ctx):
     if is_server_allowed(ctx.guild.id):
@@ -177,32 +146,32 @@ async def dboff(ctx):
 
 @bot.command()
 async def dbhelp2(ctx):
-    help_lines = load_txt("help2.txt")
+    try:
+        help_lines = load_txt("help2.txt")
+        description = "\n".join(help_lines) if help_lines else "Nincs tartalom."
 
-    if not help_lines:
-        await ctx.send("❌ Nem található a help2.txt vagy üres!")
-        return
+        embed = discord.Embed(
+            title="📘 DarkyBot Help",
+            description=description,
+            color=discord.Color.blue()
+        )
 
-    description = "\n".join(help_lines)
-    embed = discord.Embed(
-        title="📘 DarkyBot Help",
-        description=description,
-        color=discord.Color.blue()
-    )
-    embed.set_footer(text="Darky rendszer • segítség")
+        embed.set_footer(text="Darky rendszer • segítség")
+        embed.set_author(
+            name=ctx.guild.name,
+            icon_url=ctx.guild.icon.url if ctx.guild.icon else None
+        )
 
-    icon_url = None
-    if ctx.guild and ctx.guild.icon:
-        icon_url = ctx.guild.icon.url
+        await ctx.send(embed=embed)
 
-    if icon_url:
-        embed.set_author(name=ctx.guild.name, icon_url=icon_url)
-    else:
-        embed.set_author(name=ctx.guild.name if ctx.guild else "DarkyBot")
+    except Exception:
+        await ctx.send("❌ Hiba a help betöltésekor")
 
-    await ctx.send(embed=embed)
+# ---------------- WEB SERVER ----------------
 
-# ---------- MINI WEBSERVER ----------
+from flask import Flask
+from threading import Thread
+
 app = Flask("")
 
 @app.route("/")
@@ -215,6 +184,6 @@ def run_webserver():
 
 Thread(target=run_webserver).start()
 
-# ---------- RUN BOT ----------
-bot.run(DISCORD_TOKEN)
+# ---------------- RUN ----------------
 
+bot.run(DISCORD_TOKEN)
