@@ -232,3 +232,4 @@ keep_alive()
 
 # ---------- RUN BOT ----------
 bot.run(DISCORD_TOKEN)
+
